@@ -55,15 +55,52 @@
     };
   }
 
+  /* Secours si IndexedDB est absent ou ne répond pas (certains WebView d'APK) : localStorage */
+  function lsBackend() {
+    var P = 'scredits:';
+    localStorage.setItem(P + '__t', '1'); localStorage.removeItem(P + '__t'); /* lève une erreur si indisponible */
+    return {
+      get: function (k) {
+        try { var raw = localStorage.getItem(P + k); return Promise.resolve(raw === null ? undefined : JSON.parse(raw)); }
+        catch (e) { return Promise.reject(e); }
+      },
+      put: function (k, v) {
+        try { localStorage.setItem(P + k, JSON.stringify(v)); return Promise.resolve(); }
+        catch (e) { return Promise.reject(e); }
+      },
+      del: function (k) {
+        try { localStorage.removeItem(P + k); return Promise.resolve(); }
+        catch (e) { return Promise.reject(e); }
+      },
+      keys: function (prefix) {
+        var out = [];
+        try {
+          for (var i = 0; i < localStorage.length; i++) {
+            var key = localStorage.key(i);
+            if (key.indexOf(P + prefix) === 0) out.push(key.slice(P.length));
+          }
+        } catch (e) { /* ignoré */ }
+        return Promise.resolve(out);
+      }
+    };
+  }
+
   function openBackend() {
     if (backend) return backend;
     backend = new Promise(function (resolve) {
-      function fallback() { persistent = false; resolve(memoryBackend()); }
+      var done = false, timer = null;
+      function finish(b, pers) { if (done) return; done = true; clearTimeout(timer); persistent = pers; resolve(b); }
+      function fallback() {
+        if (done) return;
+        try { finish(lsBackend(), true); } catch (e) { finish(memoryBackend(), false); }
+      }
+      /* Si IndexedDB ne répond pas au bout de 4 s, on bascule au lieu de rester bloqué */
+      timer = setTimeout(fallback, 4000);
       if (!window.indexedDB) { fallback(); return; }
       var r;
       try { r = indexedDB.open(DB_NAME, 1); } catch (e) { fallback(); return; }
       r.onupgradeneeded = function () { r.result.createObjectStore(STORE); };
-      r.onsuccess = function () { resolve(idbBackend(r.result)); };
+      r.onsuccess = function () { finish(idbBackend(r.result), true); };
       r.onerror = r.onblocked = fallback;
     });
     return backend;
