@@ -225,6 +225,30 @@ button, input, textarea { font: inherit; color: inherit; }
 .dialog li { padding: 10px 12px; background: var(--warn-bg); border-radius: 8px; overflow-wrap: anywhere; }
 .dialog .acts { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; }
 
+/* Vente et parrainage */
+.code-box { display: flex; flex-direction: column; gap: 2px; align-items: center; padding: 12px; border: 2px dashed var(--accent); border-radius: 12px; background: var(--accent-soft); }
+.code-box span { font-size: 13px; color: var(--muted); }
+.code-box strong { font-size: 30px; letter-spacing: 3px; color: var(--ink); }
+.par-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.par-grid div { background: var(--surface-2); border-radius: 8px; padding: 10px; display: flex; flex-direction: column; gap: 2px; }
+.par-grid span { font-size: 13px; color: var(--muted); }
+.par-grid strong { font-size: 18px; }
+.par-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.par-list li { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; border-bottom: 1px solid var(--line); padding-bottom: 6px; }
+.dialog.par { border-color: var(--accent); width: min(100%, 540px); }
+.dialog.par h2 { color: var(--ink); }
+
+/* Relevé à envoyer au client */
+.send-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.btn-wa { background: #1B7F43; border-color: #1B7F43; color: #fff; }
+.btn-wa:hover { filter: brightness(1.1); }
+a.btn { text-decoration: none; display: inline-flex; align-items: center; justify-content: center; }
+.dialog.stmt { border-color: var(--accent); width: min(100%, 560px); }
+.dialog.stmt h2 { color: var(--ink); }
+.st-canvas { width: 100%; height: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; display: block; }
+.st-field { display: flex; flex-direction: column; gap: 4px; font-size: 14px; }
+.st-field input { border: 1px solid var(--line); background: var(--surface-2); color: var(--ink); border-radius: 8px; padding: 8px 11px; min-height: 40px; font: inherit; }
+
 /* Licence et espace administrateur */
 .lock { min-height: 70vh; display: flex; align-items: center; justify-content: center; }
 .lock-card { background: var(--surface); border: 1px solid var(--line); border-radius: 14px; padding: 28px 24px; max-width: 520px; width: 100%; display: flex; flex-direction: column; align-items: flex-start; gap: 14px; }
@@ -239,6 +263,8 @@ button, input, textarea { font: inherit; color: inherit; }
 .admin-ov { z-index: 70; }
 .dialog.admin { border-color: var(--accent); width: min(100%, 560px); }
 .dialog.admin h2 { color: var(--ink); }
+.ra { width: 100%; }
+.ra .chips { align-items: center; }
 .adsec { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--line); padding-top: 12px; }
 .adsec h3 { font-size: 16px; }
 .adstat { margin: 0; padding: 10px 12px; background: var(--accent-soft); border-radius: 8px; }
