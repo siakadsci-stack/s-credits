@@ -32,6 +32,7 @@
       <p class="tagline">Sommes dues par vos clients, versements reçus et dates de relance.</p>
     </div>
     <div class="top-acts">
+      <button class="btn" id="btnParrain" type="button" data-par="open" hidden>Parrainage</button>
       <button class="btn" id="btnAdmin" type="button" data-adm="open" hidden>Administrateur</button>
       <button class="btn btn-primary" id="btnNew" type="button" aria-expanded="false" aria-controls="formPanel">+ Nouveau crédit</button>
     </div>
@@ -123,6 +124,26 @@
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
 
+<script>
+/* Filet de sécurité : si le démarrage reste bloqué, on affiche la vraie cause au lieu de « Vérification… » */
+(function () {
+  function esc(x) { return String(x).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function stuck() { var l = document.getElementById('lock'); return l && !l.hidden && /Vérification de la licence/.test(l.textContent || ''); }
+  function show(why) {
+    var l = document.getElementById('lock'); if (!l) return;
+    var ls = 'non', idb = 'non';
+    try { localStorage.setItem('_t', '1'); localStorage.removeItem('_t'); ls = 'oui'; } catch (e) {}
+    try { if (window.indexedDB) idb = 'oui'; } catch (e) {}
+    l.innerHTML = '<div class="lock-card"><h2>Démarrage impossible</h2><p>' + esc(why) + '</p>' +
+      '<p class="muted">Adresse : ' + esc(location.protocol + '//' + (location.host || '(fichier)')) + '<br>IndexedDB : ' + idb + ' · localStorage : ' + ls + '<br>' + esc((navigator.userAgent || '').slice(0, 140)) + '</p>' +
+      '<button class="btn btn-primary" type="button" onclick="location.reload()">Réessayer</button></div>';
+  }
+  window.addEventListener('error', function (e) { setTimeout(function () { if (stuck()) show('Erreur : ' + (e.message || 'inconnue') + (e.filename ? ' (' + e.filename.split('/').pop() + ':' + e.lineno + ')' : '')); }, 50); });
+  window.addEventListener('unhandledrejection', function (e) { setTimeout(function () { if (stuck()) show('Erreur : ' + ((e.reason && e.reason.message) || e.reason || 'inconnue')); }, 50); });
+  setTimeout(function () { if (stuck()) show('Le démarrage prend trop de temps.'); }, 10000);
+})();
+</script>
+<script src="config.js"></script>
 <script src="store.js"></script>
 <script src="app.js"></script>
 <script>
