@@ -218,6 +218,7 @@
       (r > 0 ? '<div class="pay"><input id="p-' + c.id + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Montant reçu" aria-label="Montant du versement de ' + esc(c.nom) + '" data-pay="' + c.id + '">' +
         '<button class="btn btn-primary btn-small" type="button" data-act="pay" data-id="' + c.id + '">Enregistrer le versement</button>' +
         '<button class="btn btn-small" type="button" data-act="settle" data-id="' + c.id + '">Tout solder</button></div>' : '') +
+      '<div class="send-row"><button class="btn btn-small btn-wa" type="button" data-act="stmt" data-id="' + c.id + '">Envoyer le point par WhatsApp</button></div>' +
       '<button class="link toggle" type="button" data-act="toggle" data-id="' + c.id + '" aria-expanded="' + open + '">' + (open ? 'Masquer les détails' : 'Historique et réglages') + '</button>' +
       '<div class="details"' + (open ? '' : ' hidden') + '>' +
         '<div><h4>Versements reçus</h4>' + hist + '</div>' +
@@ -270,6 +271,7 @@
   /* Alerte à l'échéance */
   function showOverlay(dues) {
     var ov = $('#overlay');
+    $('#dialog').className = 'dialog';
     $('#dialog').innerHTML = '<h2 id="ovTitle">Rappel de recouvrement</h2><ul>' + dues.map(function (c) {
       return '<li>Il faut encaisser <strong>' + esc(c.nom) + '</strong> : il doit <strong class="num">' + nf(reste(c)) + ' FCFA</strong>.</li>';
     }).join('') + '</ul><div class="acts"><button class="btn" type="button" data-act="ovclose">Fermer</button><button class="btn btn-primary" type="button" data-act="ovview" id="ovMain">Voir les dossiers</button></div>';
@@ -284,6 +286,205 @@
     if (!fresh.length) return;
     dues.forEach(function (c) { alerted[c.id + '|' + c.rappel] = true; });
     showOverlay(dues);
+  }
+
+  /* Relevé de compte à envoyer au client (WhatsApp) */
+  var stmtId = null;
+  var SENDER_KEY = 'scredits.expediteur';
+  function getSender() { try { return localStorage.getItem(SENDER_KEY) || ''; } catch (e) { return ''; } }
+  function setSender(v) { try { localStorage.setItem(SENDER_KEY, v); } catch (e) { /* ignoré */ } }
+  function plain(t) { return String(t).replace(/[\u202f\u00a0]/g, ' '); }
+  function money(n) { return plain(nf(n)) + ' FCFA'; }
+  function waPhone(tel) {
+    var raw = String(tel || '').trim(), d = raw.replace(/\D/g, '');
+    if (!d) return '';
+    if (raw.charAt(0) === '+') return d;
+    if (d.slice(0, 2) === '00') return d.slice(2);
+    if (d.length === 10 || d.length === 8) return '225' + d;
+    if (d.length >= 11) return d;
+    return '';
+  }
+  function sortedPays(c) {
+    return c.versements.map(function (v, i) { return { v: v, i: i }; }).sort(function (a, b) {
+      return a.v.date < b.v.date ? -1 : a.v.date > b.v.date ? 1 : a.i - b.i;
+    }).map(function (x) { return x.v; });
+  }
+  function statementText(c, sender) {
+    var r = reste(c), pays = sortedPays(c), L = [];
+    L.push('*RELEVÉ DE COMPTE*');
+    L.push('');
+    L.push('Bonjour ' + c.nom + ',');
+    L.push('Voici le point de votre crédit au ' + fmtDate(todayIso()) + '.');
+    L.push('');
+    L.push('*Montant total dû :* ' + money(c.total));
+    L.push('');
+    if (pays.length) {
+      L.push('*Versements reçus :*');
+      pays.forEach(function (v, i) { L.push((i + 1) + '. ' + fmtDate(v.date) + ' : ' + money(v.montant) + (v.label ? ' (' + v.label + ')' : '')); });
+      L.push('*Total versé :* ' + money(paid(c)));
+    } else {
+      L.push('Aucun versement reçu pour le moment.');
+    }
+    L.push('');
+    if (r > 0) {
+      L.push('*RESTE À PAYER : ' + money(r) + '*');
+      if (c.rappel) L.push('Date de règlement prévue : ' + fmtDate(c.rappel));
+    } else {
+      L.push('*Crédit entièrement soldé. Reste à payer : 0 FCFA*');
+    }
+    L.push('');
+    L.push('Merci de votre confiance.');
+    if (sender) L.push('— ' + sender);
+    return L.join('\n');
+  }
+  function fitText(ctx, t, maxW) {
+    if (ctx.measureText(t).width <= maxW) return t;
+    while (t.length > 1 && ctx.measureText(t + '…').width > maxW) t = t.slice(0, -1);
+    return t + '…';
+  }
+  function drawStatement(cv, c, sender) {
+    var W = 720, P = 40, SC = 2, FONT = '"IBM Plex Sans","Segoe UI",system-ui,sans-serif';
+    var pays = sortedPays(c), r = reste(c);
+    var H = 524 + 46 * (Math.max(pays.length, 1) + 1);
+    cv.width = W * SC; cv.height = H * SC;
+    var x = cv.getContext('2d');
+    x.scale(SC, SC);
+    x.fillStyle = '#FFFFFF'; x.fillRect(0, 0, W, H);
+    x.fillStyle = '#0A6A5A'; x.fillRect(0, 0, W, 104);
+    x.textBaseline = 'alphabetic'; x.textAlign = 'left';
+    x.fillStyle = '#FFFFFF'; x.font = '700 30px ' + FONT; x.fillText('RELEVÉ DE COMPTE', P, 52);
+    x.font = '400 17px ' + FONT; x.fillStyle = '#DDF0EB';
+    x.fillText(fitText(x, sender || 'Point sur votre crédit', W - 2 * P), P, 80);
+    var y = 148;
+    x.fillStyle = '#586B66'; x.font = '400 14px ' + FONT; x.fillText('CLIENT', P, y);
+    x.textAlign = 'right'; x.fillText('DATE DU RELEVÉ', W - P, y); x.textAlign = 'left';
+    y += 32;
+    x.fillStyle = '#13201D'; x.font = '700 28px ' + FONT; x.fillText(fitText(x, c.nom, 400), P, y);
+    x.textAlign = 'right'; x.font = '600 18px ' + FONT; x.fillText(fmtDate(todayIso()), W - P, y); x.textAlign = 'left';
+    y += 28;
+    x.fillStyle = '#586B66'; x.font = '400 16px ' + FONT;
+    if (c.tel) x.fillText(fitText(x, c.tel, 400), P, y);
+    y += 40;
+    x.fillStyle = '#F4F7F6'; x.fillRect(P, y, W - 2 * P, 38);
+    x.fillStyle = '#586B66'; x.font = '600 14px ' + FONT;
+    x.fillText('DATE', P + 12, y + 25); x.fillText('DÉTAIL', P + 270, y + 25);
+    x.textAlign = 'right'; x.fillText('MONTANT', W - P - 12, y + 25); x.textAlign = 'left';
+    y += 38;
+    function row(date, label, amount, bold) {
+      x.fillStyle = '#13201D'; x.font = (bold ? '700 ' : '400 ') + '18px ' + FONT;
+      x.fillText(date, P + 12, y + 30);
+      x.fillText(fitText(x, label, 190), P + 270, y + 30);
+      x.textAlign = 'right'; x.fillText(amount, W - P - 12, y + 30); x.textAlign = 'left';
+      y += 46;
+      x.fillStyle = '#D3DCD9'; x.fillRect(P, y - 1, W - 2 * P, 1);
+    }
+    row(c.createdAt ? fmtDate(c.createdAt) : '', 'Montant total dû', money(c.total), true);
+    pays.forEach(function (v) { row(fmtDate(v.date), v.label || 'Versement reçu', money(v.montant), false); });
+    if (!pays.length) {
+      x.fillStyle = '#586B66'; x.font = 'italic 400 16px ' + FONT; x.fillText('Aucun versement pour le moment.', P + 12, y + 28); y += 46;
+    }
+    y += 22;
+    x.textAlign = 'right';
+    x.fillStyle = '#586B66'; x.font = '400 17px ' + FONT; x.fillText('Total versé', W - P - 260, y);
+    x.fillStyle = '#13201D'; x.font = '600 20px ' + FONT; x.fillText(money(paid(c)), W - P, y);
+    y += 20;
+    var boxCol = r > 0 ? '#FBE4E1' : '#E0F3E6', txtCol = r > 0 ? '#A8231A' : '#1B6F3A';
+    x.fillStyle = boxCol; x.fillRect(P, y, W - 2 * P, 78);
+    x.textAlign = 'left'; x.fillStyle = txtCol; x.font = '700 18px ' + FONT; x.fillText(r > 0 ? 'RESTE À PAYER' : 'CRÉDIT SOLDÉ', P + 18, y + 46);
+    x.textAlign = 'right'; x.font = '700 32px ' + FONT; x.fillText(money(r), W - P - 18, y + 49);
+    y += 78 + 34;
+    x.textAlign = 'left'; x.fillStyle = '#13201D'; x.font = '400 17px ' + FONT;
+    if (r > 0 && c.rappel) x.fillText('Date de règlement prévue : ' + fmtDate(c.rappel), P, y);
+    y += 30;
+    x.fillStyle = '#586B66'; x.font = 'italic 400 16px ' + FONT; x.fillText('Merci de votre confiance.', P, y);
+  }
+  function refreshStatement() {
+    var c = find(stmtId), cv = document.getElementById('stCanvas');
+    if (!c || !cv) return;
+    var sender = ($('#stSender') || {}).value || '';
+    sender = sender.trim();
+    drawStatement(cv, c, sender);
+    var num = waPhone(c.tel);
+    var a = $('#stWa');
+    a.href = 'https://wa.me/' + num + '?text=' + encodeURIComponent(statementText(c, sender));
+    $('#stHint').textContent = num ? 'Le message partira vers le +' + num + '.' : 'Aucun numéro valide enregistré pour ce client : WhatsApp vous laissera choisir le contact.';
+  }
+  function showStatement(c) {
+    stmtId = c.id;
+    var d = $('#dialog');
+    d.className = 'dialog stmt';
+    d.innerHTML = '<h2 id="ovTitle">Point à envoyer à ' + esc(c.nom) + '</h2>' +
+      '<canvas id="stCanvas" class="st-canvas" role="img" aria-label="Aperçu du relevé de ' + esc(c.nom) + '"></canvas>' +
+      '<label class="st-field">Votre nom ou celui de votre boutique (facultatif)<input id="stSender" type="text" maxlength="60" autocomplete="off" value="' + esc(getSender()) + '"></label>' +
+      '<p class="hint" id="stHint"></p>' +
+      '<div class="acts"><button class="btn" type="button" data-act="ovclose">Fermer</button>' +
+      '<button class="btn" type="button" data-act="stcopy" data-id="' + c.id + '">Copier le texte</button>' +
+      '<button class="btn" type="button" data-act="stshare" data-id="' + c.id + '">Partager l\'image</button>' +
+      '<a class="btn btn-wa" id="stWa" target="_blank" rel="noopener">Envoyer sur WhatsApp</a></div>';
+    $('#overlay').hidden = false;
+    refreshStatement();
+  }
+  function copyLegacy(t) {
+    return new Promise(function (resolve, reject) {
+      var ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var okc = false; try { okc = document.execCommand('copy'); } catch (e) { okc = false; }
+      document.body.removeChild(ta); okc ? resolve() : reject(new Error('copy'));
+    });
+  }
+  function copyText(t) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(t).catch(function () { return copyLegacy(t); });
+    }
+    return copyLegacy(t);
+  }
+  function waUrl(c, sender) {
+    return 'https://wa.me/' + waPhone(c.tel) + '?text=' + encodeURIComponent(statementText(c, sender));
+  }
+  function openLink(url) {
+    var a = document.createElement('a');
+    a.href = url; a.target = '_blank'; a.rel = 'noopener';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  }
+  function shareImage(c) {
+    var cv = document.getElementById('stCanvas'); if (!cv) return;
+    var sender = (($('#stSender') || {}).value || '').trim();
+    var fname = 'releve-' + c.nom.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') + '.png';
+    var cap = window.Capacitor, CP = cap && cap.Plugins;
+    var native = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+    if (native) {
+      /* Application Android : image + texte via le partage natif (modules @capacitor/share et @capacitor/filesystem) */
+      if (CP && CP.Share && CP.Filesystem) {
+        var b64 = cv.toDataURL('image/png').split(',')[1];
+        CP.Filesystem.writeFile({ path: fname, data: b64, directory: 'CACHE' }).then(function (r) {
+          return CP.Share.share({ title: 'Relevé de compte', text: statementText(c, sender), files: [r.uri], dialogTitle: 'Envoyer le point' });
+        }).catch(function (e) {
+          var m = String((e && e.message) || e || '');
+          if (/cancel/i.test(m)) return;
+          toast('Partage impossible : le point est envoyé en texte.');
+          openLink(waUrl(c, sender));
+        });
+      } else {
+        toast("Image non disponible dans cette version : le point est envoyé en texte sur WhatsApp.");
+        openLink(waUrl(c, sender));
+      }
+      return;
+    }
+    cv.toBlob(function (blob) {
+      if (!blob) { toast("Impossible de créer l'image."); return; }
+      var file = null;
+      try { file = new File([blob], fname, { type: 'image/png' }); } catch (e) { file = null; }
+      if (file && navigator.canShare && navigator.canShare({ files: [file] })) {
+        navigator.share({ files: [file], text: statementText(c, sender) }).catch(function (e) {
+          if (!e || e.name !== 'AbortError') toast("Le partage a échoué. Utilisez « Envoyer sur WhatsApp ».");
+        });
+        return;
+      }
+      var url = URL.createObjectURL(blob), a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
+      toast("Image enregistrée sur l'appareil : joignez-la dans WhatsApp.");
+    }, 'image/png');
   }
 
   /* Actions sur la liste */
@@ -303,6 +504,13 @@
     if (act === 'ovclose') { closeOverlay(); return; }
     if (act === 'ovview') { closeOverlay(); var a = $('#alerts'); if (!a.hidden) a.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     if (!c) return;
+    if (act === 'stmt') { showStatement(c); return; }
+    if (act === 'stcopy') {
+      var snd = (($('#stSender') || {}).value || '').trim();
+      copyText(statementText(c, snd)).then(function () { toast('Texte copié'); }, function () { toast('Copie impossible sur cet appareil.'); });
+      return;
+    }
+    if (act === 'stshare') { shareImage(c); return; }
     if (act === 'view') { openIds[id] = true; render(); var el = document.getElementById('c-' + id); if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' }); return; }
     if (act === 'toggle') { openIds[id] = !openIds[id]; if (!openIds[id]) confirmDel = null; render(); return; }
     if (act === 'pay') {
@@ -350,6 +558,9 @@
     }
   });
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && !$('#overlay').hidden) closeOverlay(); });
+  $('#dialog').addEventListener('input', function (e) {
+    if (e.target && e.target.id === 'stSender') { setSender(e.target.value.trim()); refreshStatement(); }
+  });
 
   $('#list').addEventListener('change', async function (e) {
     var t = e.target;
@@ -466,6 +677,12 @@
     else if (lstate === 'unverifiable') h = "<h2>Licence non vérifiée</h2><p>Impossible de lire la licence enregistrée sur cet appareil. Rechargez la page. Si le problème continue, contactez l'administrateur.</p>";
     else if (lstate === 'none') h = "<h2>Licence non activée</h2><p>Cette application n'est pas encore activée. Contactez l'administrateur pour obtenir votre accès" + contactTxt() + '.</p>';
     else h = "<h2>Votre licence a expiré</h2><p>Votre durée d'utilisation est arrivée à son terme le <strong>" + fmtDate(license.expiresAt) + "</strong>. Pour continuer à utiliser S crédits, contactez l'administrateur afin de relancer le délai" + contactTxt() + '.</p><p class="muted">Vos crédits et vos pièces d\'identité sont conservés. Ils reviendront dès que la licence sera renouvelée.</p>';
+    if (CFG.contact && (lstate === 'none' || lstate === 'expired')) {
+      var buy = lstate === 'none' ? 'Acheter' : 'Renouveler';
+      var wa = 'https://wa.me/' + digits(CFG.contact) + '?text=' + encodeURIComponent('Bonjour, je souhaite ' + buy.toLowerCase() + ' S crédits (' + money(CFG.prix) + ' pour ' + joursTxt() + ').' + (profile && profile.code ? ' Mon code parrain : ' + profile.code : ''));
+      h += '<a class="btn btn-wa" target="_blank" rel="noopener" href="' + wa + '">' + buy + ' pour ' + money(CFG.prix) + ' (WhatsApp)</a>';
+    }
+    if (CFG.serveur && (lstate === 'none' || lstate === 'expired')) h += raHtml();
     if (isOwner && lstate !== 'loading') h += '<button class="btn" type="button" data-adm="open">Espace administrateur</button>';
     $('#lock').innerHTML = '<div class="lock-card"><div class="lockup lock-brand">' + logoSvg(96) + '<span class="wordmark" aria-hidden="true">crédits</span></div>' + h + '</div>';
   }
@@ -480,6 +697,7 @@
       if (prevState !== 'ok' && loaded) { render(); checkDue(); }
     }
     $('#btnAdmin').hidden = !(ok && isOwner);
+    renderParrainBtn();
     if (!$('#adminOv').hidden) updateAdStatus();
     prevState = lstate;
   }
@@ -553,19 +771,310 @@
       await dbRef.doc('license/main').set(next);
       license = next; licenseKnown = true; applyGate();
       toast('Licence mise à jour');
-    } catch (e) { toast("Modification impossible. Réessayez."); }
+      return true;
+    } catch (e) { toast("Modification impossible. Réessayez."); return false; }
   }
   function baseDate() {
     var t = todayIso();
     return license && license.expiresAt && license.expiresAt > t ? license.expiresAt : t;
   }
 
+  /* Vente, parrainage et commissions */
+  var CFG = (function () {
+    var d = { prix: 5000, commission: 1000, jours: 365, serveur: '', contact: '' };
+    var u = window.SCREDITS_CONFIG || {};
+    Object.keys(u).forEach(function (k) { d[k] = u[k]; });
+    return d;
+  })();
+  var profile = null, adSale = null, adBusy = false, adminCodeMem = '';
+  var parState = { data: null, at: '', erreur: '' };
+  var PAR_KEY = 'scredits.parrainage';
+  var CODE_ALPHA = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  var CODE_RE = /^[A-Z]{3}-[A-HJ-NP-Z2-9]{4}$/;
+  var SRV_ERR = {
+    non_autorise: "Le serveur refuse le code administrateur : il doit être identique dans le script Google (CODE_ADMIN).",
+    parrain_inconnu: "Ce code parrain n'existe pas. Vérifiez-le ou laissez le champ vide.",
+    parrain_invalide: "Le code parrain n'est pas valide. Format : ABC-2X7K.",
+    code_pris: "Un code identique existe déjà. Réessayez.",
+    donnees_invalides: "Vérifiez le nom et le numéro de téléphone du client.",
+    client_inconnu: "Ce client n'est pas enregistré sur le serveur : renouvellement impossible.",
+    serveur_invalide: "Réponse du serveur illisible : vérifiez le lien du serveur et son déploiement (accès « Tout le monde »).",
+    action_inconnue: "Le script Google en ligne est une ancienne version : collez le nouveau Code.gs puis redéployez (Déployer > Gérer les déploiements > Modifier > Nouvelle version).",
+    trop_de_demandes: "Trop de demandes en attente pour ce numéro. Payez et attendez la validation, ou contactez l'administrateur.",
+    demande_inconnue: "Cette demande est introuvable sur le serveur. Refaites une demande.",
+    erreur_serveur: "Erreur du serveur Google. Réessayez dans un instant."
+  };
+  function joursTxt() { return CFG.jours === 365 ? '1 an' : CFG.jours + ' jours'; }
+  function digits(t) { return String(t || '').replace(/\D/g, ''); }
+  function normCode(t) {
+    var c = String(t || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+    return c.length === 7 ? c.slice(0, 3) + '-' + c.slice(3) : c;
+  }
+  function genCode(nom) {
+    var p = String(nom || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/[^A-Z]/g, '').slice(0, 3);
+    while (p.length < 3) p += 'X';
+    var arr = new Uint8Array(4), s = '', i;
+    if (window.crypto && crypto.getRandomValues) crypto.getRandomValues(arr);
+    else for (i = 0; i < 4; i++) arr[i] = Math.floor(Math.random() * 256);
+    for (i = 0; i < 4; i++) s += CODE_ALPHA.charAt(arr[i] % CODE_ALPHA.length);
+    return p + '-' + s;
+  }
+  function timeoutFetch(url, opts, ms) {
+    var ctl = typeof AbortController === 'function' ? new AbortController() : null;
+    var timer = setTimeout(function () { if (ctl) ctl.abort(); }, ms);
+    if (ctl) opts.signal = ctl.signal;
+    return fetch(url, opts).then(function (r) { return r.text(); }).then(function (t) { clearTimeout(timer); return t; }, function (e) { clearTimeout(timer); throw e; });
+  }
+  function parseJson(t) { try { return JSON.parse(t); } catch (e) { return { ok: false, erreur: 'serveur_invalide' }; } }
+  function srvPost(body) {
+    return timeoutFetch(CFG.serveur, { method: 'POST', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(body) }, 25000).then(parseJson);
+  }
+  function srvGet(params) {
+    var qs = Object.keys(params).map(function (k) { return encodeURIComponent(k) + '=' + encodeURIComponent(params[k]); }).join('&');
+    return timeoutFetch(CFG.serveur + (CFG.serveur.indexOf('?') < 0 ? '?' : '&') + qs, { method: 'GET' }, 25000).then(parseJson);
+  }
+  function watchProfile(db) {
+    db.doc('license/profil').onSnapshot(function (s) {
+      profile = s.exists ? s.data() : null;
+      renderParrainBtn();
+    }, function () { /* profil illisible : le bouton reste masqué */ });
+  }
+  function renderParrainBtn() { var b = $('#btnParrain'); if (b) b.hidden = !(profile && profile.code && lstate === 'ok'); }
+
+  function welcomeText(s, exp) {
+    return 'Bonjour ' + s.client + ', merci pour votre achat de S crédits ! Votre licence est valable jusqu\'au ' + fmtDate(exp) + '.\n\n' +
+      'Votre code parrain : *' + s.code + '*\n' +
+      'Chaque personne qui achète S crédits (' + money(CFG.prix) + ') en donnant votre code vous rapporte ' + money(CFG.commission) + '. Partagez-le !';
+  }
+  function inviteText() {
+    var L = ['Salut ! Je te recommande *S crédits*, l\'application qui permet de suivre les crédits de tes clients, les versements et le reste à payer, avec une alerte le jour où il faut encaisser.', '',
+      'Prix : ' + money(CFG.prix) + ' pour ' + joursTxt() + '.', 'Au moment de l\'achat, donne mon code parrain : *' + profile.code + '*'];
+    if (CFG.contact) L.push('Pour l\'acheter, contacte : +' + digits(CFG.contact));
+    return L.join('\n');
+  }
+
+  function saleHtml() {
+    var h = '<div class="adsec adsale"><h3>' + (adSale ? (adSale.sale.type === 'nouveau' ? 'Nouvelle vente' : 'Renouvellement') : (profile ? 'Renouveler' : 'Nouvelle vente')) + ' (' + money(CFG.prix) + ' · ' + joursTxt() + ')</h3>';
+    if (adSale) {
+      h += '<p class="adstat"><strong>' + (adSale.sale.type === 'nouveau' ? 'Vente enregistrée.' : 'Renouvellement enregistré.') + '</strong> Licence valable jusqu\'au <strong>' + fmtDate(adSale.expiresAt) + '</strong>.</p>' +
+        '<div class="code-box"><span>Code parrain du client</span><strong>' + esc(adSale.sale.code) + '</strong></div>';
+      if (adSale.commission > 0) h += '<p class="hint">Commission de ' + money(adSale.commission) + ' pour le parrain ' + esc(adSale.sale.parrain) + ' : elle apparaît dans le tableau Google (à payer par Mobile Money).</p>';
+      if (adSale.avert) h += '<p class="hint">' + esc(adSale.avert) + '</p>';
+      if (!adSale.server) h += '<p class="hint">Serveur non configuré : cette vente n\'a pas été enregistrée en ligne.</p>';
+      h += '<div class="chips"><button class="btn btn-small btn-wa" type="button" data-adm="sendcode">Envoyer le code au client (WhatsApp)</button>' +
+        '<button class="btn btn-small" type="button" data-adm="newsale">Nouvelle opération</button></div></div>';
+      return h;
+    }
+    if (profile) {
+      h += '<p class="hint">Client de cet appareil : <strong>' + esc(profile.nom) + '</strong> · code parrain ' + esc(profile.code) + '</p>';
+    } else {
+      h += '<div class="row-edit"><label>Nom du client<input id="sNom" type="text" autocomplete="off" placeholder="Ex. Koffi Yao"></label>' +
+        '<label>Téléphone (Mobile Money)<input id="sTel" type="tel" autocomplete="off" inputmode="tel" placeholder="Ex. 07 00 00 00 00"></label>' +
+        '<label>Code parrain (facultatif)<input id="sParrain" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="Ex. KOF-7H2Q"></label></div>';
+    }
+    h += '<p class="form-error" id="sErr" role="alert"></p>' +
+      '<button class="btn btn-primary" type="button" data-adm="sell">' + sellLabel() + '</button>';
+    if (!CFG.serveur) h += '<p class="hint">Serveur non configuré : la vente active la licence, mais les commissions ne sont pas suivies.</p>';
+    return h + '</div>';
+  }
+  function sellLabel() { return (profile ? 'Renouveler ' : 'Enregistrer la vente et activer ') + joursTxt(); }
+
+  async function sellLicense() {
+    if (adBusy) return;
+    var err = $('#sErr'); if (err) err.textContent = '';
+    var renew = !!profile, nom, tel, parrain = '';
+    if (renew) { nom = profile.nom; tel = profile.tel; }
+    else {
+      nom = ($('#sNom').value || '').trim(); tel = ($('#sTel').value || '').trim(); parrain = normCode($('#sParrain').value);
+      if (nom.length < 2) { err.textContent = 'Saisissez le nom du client.'; return; }
+      if (digits(tel).length < 8) { err.textContent = 'Saisissez un numéro de téléphone valide : il sert à payer les commissions.'; return; }
+      if (parrain && !CODE_RE.test(parrain)) { err.textContent = SRV_ERR.parrain_invalide; return; }
+    }
+    adBusy = true;
+    var btn = document.querySelector('[data-adm="sell"]'); if (btn) { btn.disabled = true; btn.textContent = 'Enregistrement…'; }
+    try {
+      var sale = { id: newId(), date: new Date().toISOString(), type: renew ? 'renouvellement' : 'nouveau', client: nom, tel: tel, code: renew ? profile.code : genCode(nom), parrain: parrain };
+      var res = null;
+      if (CFG.serveur) {
+        for (var i = 0; i < 5; i++) {
+          try { res = await srvPost(Object.assign({ action: 'vente', admin: adminCodeMem }, sale)); }
+          catch (e) { err.textContent = "Pas de connexion internet : la vente doit être enregistrée en ligne pour que le parrain soit crédité. Activez les données mobiles, puis réessayez."; return; }
+          if (!renew && res && res.erreur === 'code_pris') { sale.code = genCode(nom); continue; }
+          break;
+        }
+        if (!res || !res.ok) { err.textContent = (SRV_ERR[res && res.erreur] || 'Le serveur a refusé la vente.') + (res && res.detail ? ' Détail : ' + res.detail : ''); return; }
+      }
+      var newExp = addDays(baseDate(), CFG.jours);
+      var okL = await writeLicense({ expiresAt: newExp });
+      if (!okL) { err.textContent = CFG.serveur ? "Vente enregistrée sur le serveur, mais la licence n'a pas pu être modifiée : ajoutez la durée à la main plus bas." : "La licence n'a pas pu être modifiée."; return; }
+      if (!renew) {
+        profile = { code: sale.code, nom: nom, tel: tel, parrain: parrain, venteLe: sale.date };
+        try { await dbRef.doc('license/profil').set(profile); } catch (e) { toast("Le code parrain n'a pas pu être gardé sur cet appareil."); }
+      }
+      adSale = { sale: sale, expiresAt: newExp, server: !!CFG.serveur, commission: res ? Number(res.commission) || 0 : 0, avert: (res && res.avertissement) || '' };
+      renderAdmin(); renderParrainBtn();
+    } finally {
+      adBusy = false;
+      var b2 = document.querySelector('[data-adm="sell"]'); if (b2) { b2.disabled = false; b2.textContent = sellLabel(); }
+    }
+  }
+
+  function loadParCache() {
+    try { var c = JSON.parse(localStorage.getItem(PAR_KEY) || 'null'); if (c && c.code === (profile && profile.code)) { parState.data = c.data; parState.at = c.at; } } catch (e) { /* ignoré */ }
+  }
+  function refreshParrain() {
+    if (!profile || !CFG.serveur) return;
+    var el = $('#parStats'); if (el && !parState.data) el.innerHTML = '<p class="hint">Chargement de vos commissions…</p>';
+    srvGet({ action: 'parrain', code: profile.code }).then(function (r) {
+      if (r && r.ok) {
+        parState = { data: r, at: new Date().toISOString(), erreur: '' };
+        try { localStorage.setItem(PAR_KEY, JSON.stringify({ code: profile.code, data: r, at: parState.at })); } catch (e) { /* ignoré */ }
+      } else {
+        parState.erreur = r && r.erreur === 'code_inconnu' ? "Votre code n'est pas encore enregistré sur le serveur. Contactez l'administrateur." : (SRV_ERR[r && r.erreur] || 'Impossible de lire vos commissions.');
+      }
+      paintParStats();
+    }, function () { parState.erreur = 'Pas de connexion internet.'; paintParStats(); });
+  }
+  function paintParStats() {
+    var el = $('#parStats'); if (!el) return;
+    if (!CFG.serveur) { el.innerHTML = '<p class="hint">Le suivi de vos commissions sera disponible dès que le serveur sera configuré.</p>'; return; }
+    var d = parState.data, h = '';
+    if (d) {
+      h = '<h3>Vos commissions</h3><div class="par-grid">' +
+        '<div><span>Clients parrainés</span><strong>' + d.filleuls.length + '</strong></div>' +
+        '<div><span>Total gagné</span><strong>' + money(d.total) + '</strong></div>' +
+        '<div><span>Déjà payé</span><strong>' + money(d.paye) + '</strong></div>' +
+        '<div><span>Reste à recevoir</span><strong>' + money(d.aPayer) + '</strong></div></div>';
+      if (d.filleuls.length) h += '<ul class="par-list">' + d.filleuls.map(function (f) {
+        return '<li><span>' + esc(f.nom) + ' · ' + esc(f.date) + '</span><span>' + money(f.commission) + ' · ' + esc(f.statut) + '</span></li>';
+      }).join('') + '</ul>';
+      else h += '<p class="hint">Aucun client parrainé pour le moment. Partagez votre code !</p>';
+      if (parState.at) h += '<p class="hint">Mis à jour le ' + fmtDate(parState.at.slice(0, 10)) + '.</p>';
+    }
+    if (parState.erreur) h += '<p class="form-error">' + esc(parState.erreur) + '</p>';
+    if (!d && !parState.erreur) h = '<p class="hint">Chargement de vos commissions…</p>';
+    h += '<button class="btn btn-small" type="button" data-par="refresh">Actualiser</button>';
+    el.innerHTML = h;
+  }
+  function showParrain() {
+    if (!profile) return;
+    var d = $('#dialog'); d.className = 'dialog par';
+    d.innerHTML = '<h2 id="ovTitle">Parrainage : ' + money(CFG.commission) + ' par client</h2>' +
+      '<p>Chaque personne qui achète S crédits (' + money(CFG.prix) + ') en donnant votre code vous rapporte <strong>' + money(CFG.commission) + '</strong>, payés par Mobile Money sur le <strong>' + esc(profile.tel) + '</strong>.</p>' +
+      '<div class="code-box"><span>Votre code parrain</span><strong>' + esc(profile.code) + '</strong></div>' +
+      '<div class="acts"><button class="btn" type="button" data-act="ovclose">Fermer</button><button class="btn" type="button" data-par="copy">Copier mon code</button>' +
+      '<button class="btn btn-wa" type="button" data-par="invite">Inviter par WhatsApp</button></div>' +
+      '<div class="adsec" id="parStats"></div>';
+    $('#overlay').hidden = false;
+    loadParCache(); paintParStats(); refreshParrain();
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-par]'); if (!b) return;
+    var a = b.dataset.par;
+    if (a === 'open') showParrain();
+    else if (a === 'refresh') refreshParrain();
+    else if (a === 'invite') { if (profile) openLink('https://wa.me/?text=' + encodeURIComponent(inviteText())); }
+    else if (a === 'copy') { if (profile) copyText(profile.code).then(function () { toast('Code copié'); }, function () { toast('Copie impossible sur cet appareil.'); }); }
+  });
+
+  /* Activation à distance : demande en ligne, validation dans le tableau, vérification */
+  var demande = null, ra = { view: 'home', msg: '', busy: false, f: {} };
+  async function loadDemande() {
+    if (!dbRef) return;
+    try { var s = await dbRef.doc('license/demande').get(); demande = s.exists ? s.data() : null; } catch (e) { demande = null; }
+    if (lstate !== 'ok') renderLock();
+  }
+  function raSet(patch) { Object.assign(ra, patch); if (lstate !== 'ok') renderLock(); }
+  function raHtml() {
+    var h = '<div class="adsec ra">', renew = !!profile;
+    if (demande) {
+      h += '<h3>Demande d\'activation envoyée</h3><p class="hint">Référence : <strong>' + esc(demande.code) + '</strong>. Payez ' + money(CFG.prix) + ' par Mobile Money' + (CFG.contact ? ' au <strong>+' + esc(digits(CFG.contact)) + '</strong>' : '') + ' en indiquant cette référence. Quand l\'administrateur a validé, appuyez sur « Vérifier mon activation ».</p>';
+      if (ra.msg) h += '<p class="form-error" role="alert">' + esc(ra.msg) + '</p>';
+      h += '<div class="chips"><button class="btn btn-primary" type="button" data-ra="check"' + (ra.busy ? ' disabled' : '') + '>' + (ra.busy ? 'Vérification…' : 'Vérifier mon activation') + '</button>';
+      if (CFG.contact) h += '<a class="btn btn-wa" target="_blank" rel="noopener" href="https://wa.me/' + digits(CFG.contact) + '?text=' + encodeURIComponent('Bonjour, j\'ai payé pour activer S crédits. Ma référence : ' + demande.code + ' (' + demande.client + ')') + '">Prévenir l\'administrateur (WhatsApp)</a>';
+      return h + '<button class="btn btn-small" type="button" data-ra="cancel">Annuler la demande</button></div></div>';
+    }
+    if (ra.view === 'form' && !renew) {
+      h += '<h3>Demander l\'activation</h3><div class="row-edit"><label>Votre nom<input id="rNom" type="text" autocomplete="off" value="' + esc(ra.f.nom || '') + '" placeholder="Ex. Koffi Yao"></label>' +
+        '<label>Votre téléphone (Mobile Money)<input id="rTel" type="tel" autocomplete="off" inputmode="tel" value="' + esc(ra.f.tel || '') + '" placeholder="Ex. 07 00 00 00 00"></label>' +
+        '<label>Code parrain (facultatif)<input id="rPar" type="text" autocomplete="off" autocapitalize="characters" spellcheck="false" value="' + esc(ra.f.par || '') + '" placeholder="Ex. KOF-7H2Q"></label></div>' +
+        '<p class="form-error" id="rErr" role="alert">' + esc(ra.msg) + '</p><div class="chips"><button class="btn btn-primary" type="button" data-ra="send"' + (ra.busy ? ' disabled' : '') + '>' + (ra.busy ? 'Envoi…' : 'Envoyer la demande') + '</button><button class="btn btn-small" type="button" data-ra="home">Retour</button></div></div>';
+      return h;
+    }
+    h += '<h3>' + (renew ? 'Renouveler en ligne' : 'Activer en ligne') + '</h3><p class="hint">Sans rendez-vous : envoyez une demande, payez par Mobile Money, puis activez dès que l\'administrateur a validé. Internet n\'est nécessaire que pour cette étape.</p>';
+    if (ra.msg) h += '<p class="form-error" role="alert">' + esc(ra.msg) + '</p>';
+    h += '<button class="btn btn-primary" type="button" data-ra="' + (renew ? 'send' : 'form') + '"' + (ra.busy ? ' disabled' : '') + '>' + (renew ? (ra.busy ? 'Envoi…' : 'Demander le renouvellement') : 'Demander l\'activation') + '</button></div>';
+    return h;
+  }
+  async function raSend() {
+    if (ra.busy) return;
+    var renew = !!profile, nom, tel, parrain = '';
+    if (renew) { nom = profile.nom; tel = profile.tel; }
+    else {
+      nom = ($('#rNom').value || '').trim(); tel = ($('#rTel').value || '').trim(); parrain = normCode($('#rPar').value);
+      ra.f = { nom: nom, tel: tel, par: $('#rPar').value };
+      if (nom.length < 2) return raSet({ msg: 'Saisissez votre nom.' });
+      if (digits(tel).length < 8) return raSet({ msg: 'Saisissez un numéro de téléphone valide : il sert à payer vos commissions.' });
+      if (parrain && !CODE_RE.test(parrain)) return raSet({ msg: SRV_ERR.parrain_invalide });
+    }
+    raSet({ busy: true, msg: '' });
+    var d = { id: newId() + newId() + newId(), date: new Date().toISOString(), type: renew ? 'renouvellement' : 'nouveau', client: nom, tel: tel, code: renew ? profile.code : genCode(nom), parrain: parrain };
+    var res = null;
+    try {
+      for (var i = 0; i < 5; i++) {
+        try { res = await srvPost(Object.assign({ action: 'demande' }, d)); }
+        catch (e) { return raSet({ busy: false, msg: 'Pas de connexion internet. Activez les données mobiles puis réessayez.' }); }
+        if (!renew && res && res.erreur === 'code_pris') { d.code = genCode(nom); continue; }
+        break;
+      }
+      if (!res || !res.ok) return raSet({ busy: false, msg: (SRV_ERR[res && res.erreur] || 'Le serveur a refusé la demande' + (res && res.erreur ? ' (' + res.erreur + ')' : '') + '.') + (res && res.detail ? ' Détail : ' + res.detail : '') });
+      demande = d;
+      try { await dbRef.doc('license/demande').set(d); } catch (e) { /* la demande reste en mémoire */ }
+      raSet({ busy: false, msg: '', view: 'home', f: {} });
+    } catch (e) { raSet({ busy: false, msg: 'Erreur inattendue. Réessayez.' }); }
+  }
+  async function raCheck() {
+    if (ra.busy || !demande) return;
+    raSet({ busy: true, msg: '' });
+    var res = null;
+    try { res = await srvPost({ action: 'statut', id: demande.id }); }
+    catch (e) { return raSet({ busy: false, msg: 'Pas de connexion internet. Réessayez quand le réseau est revenu.' }); }
+    if (!res || !res.ok) {
+      if (res && res.erreur === 'demande_inconnue') { await raClear(); return raSet({ busy: false, msg: SRV_ERR.demande_inconnue, view: 'home' }); }
+      return raSet({ busy: false, msg: (SRV_ERR[res && res.erreur] || 'Vérification impossible pour le moment.') + (res && res.detail ? ' Détail : ' + res.detail : '') });
+    }
+    if (res.statut === 'Refusé') { await raClear(); return raSet({ busy: false, view: 'home', msg: 'Votre demande a été refusée' + (res.note ? ' : ' + res.note : '.') + ' Contactez l\'administrateur.' }); }
+    if (res.statut !== 'Validé') return raSet({ busy: false, msg: 'Pas encore validée. Payez puis patientez : l\'administrateur valide après réception du paiement.' });
+    var d = demande;
+    var newExp = addDays(baseDate(), CFG.jours);
+    var okL = await writeLicense({ expiresAt: newExp });
+    if (!okL) return raSet({ busy: false, msg: "Paiement validé, mais la licence n'a pas pu être enregistrée sur cet appareil. Réessayez." });
+    if (d.type === 'nouveau') {
+      profile = { code: d.code, nom: d.client, tel: d.tel, parrain: d.parrain || '', venteLe: d.date };
+      try { await dbRef.doc('license/profil').set(profile); } catch (e) { toast("Le code parrain n'a pas pu être gardé sur cet appareil."); }
+    }
+    await raClear();
+    ra = { view: 'home', msg: '', busy: false };
+    toast('Licence activée jusqu\'au ' + fmtDate(newExp));
+    renderParrainBtn();
+  }
+  async function raClear() { demande = null; try { await dbRef.doc('license/demande').delete(); } catch (e) { /* ignoré */ } }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ra]'); if (!b) return;
+    var a = b.dataset.ra;
+    if (a === 'form') raSet({ view: 'form', msg: '' });
+    else if (a === 'home') raSet({ view: 'home', msg: '', f: {} });
+    else if (a === 'send') raSend();
+    else if (a === 'check') raCheck();
+    else if (a === 'cancel') { raClear().then(function () { raSet({ view: 'home', msg: '' }); }); }
+  });
+
   function openAdmin() {
-    adStep = 'code'; renderAdmin();
+    adStep = 'code'; adSale = null; renderAdmin();
     $('#adminOv').hidden = false;
     var i = $('#adCode'); if (i) i.focus();
   }
-  function closeAdmin() { $('#adminOv').hidden = true; adStep = 'code'; $('#adDialog').innerHTML = ''; }
+  function closeAdmin() { $('#adminOv').hidden = true; adStep = 'code'; adminCodeMem = ''; adSale = null; $('#adDialog').innerHTML = ''; }
   function updateAdStatus() {
     var el = $('#adStatus');
     if (!el) return;
@@ -583,7 +1092,7 @@
         '<div class="acts"><button class="btn" type="button" data-adm="close">Annuler</button><button class="btn btn-primary" type="button" data-adm="check">Valider</button></div>';
       return;
     }
-    d.innerHTML = '<h2 id="adTitle">Gestion de la licence</h2><p class="adstat" id="adStatus"></p>' +
+    d.innerHTML = '<h2 id="adTitle">Gestion de la licence</h2><p class="adstat" id="adStatus"></p>' + saleHtml() +
       '<div class="adsec"><h3>Ajouter du temps</h3><div class="chips">' +
         [7, 30, 90, 365].map(function (n) { return '<button class="chip" type="button" data-adm="add" data-n="' + n + '">+ ' + n + ' jours</button>'; }).join('') + '</div></div>' +
       '<div class="adsec"><h3>Durée personnalisée</h3><div class="row-edit"><label>Nombre de jours<input id="adDays" type="number" min="1" step="1" inputmode="numeric" placeholder="Ex. 15"></label>' +
@@ -607,7 +1116,7 @@
     if (!code) { err.textContent = 'Saisissez le code.'; return; }
     var ok = false;
     try { ok = await verifyCode(code); } catch (e) { err.textContent = 'Vérification impossible sur cet appareil.'; return; }
-    if (ok) { adFails = 0; adStep = 'panel'; renderAdmin(); return; }
+    if (ok) { adFails = 0; adminCodeMem = code; adStep = 'panel'; renderAdmin(); return; }
     adFails++; inp.value = '';
     if (adFails >= 5) { adLockUntil = Date.now() + 30000; adFails = 0; err.textContent = 'Code incorrect. Nouvel essai possible dans 30 secondes.'; }
     else err.textContent = 'Code incorrect.';
@@ -638,6 +1147,9 @@
     if (a === 'setdate') { var v = $('#adDate').value; if (!v) { toast('Choisissez une date.'); return; } writeLicense({ expiresAt: v }); return; }
     if (a === 'contact') { writeLicense({ contact: $('#adContact').value.trim() }); return; }
     if (a === 'pin') { changePin(); return; }
+    if (a === 'sell') { sellLicense(); return; }
+    if (a === 'newsale') { adSale = null; renderAdmin(); return; }
+    if (a === 'sendcode') { if (adSale) openLink('https://wa.me/' + waPhone(adSale.sale.tel) + '?text=' + encodeURIComponent(welcomeText(adSale.sale, adSale.expiresAt))); return; }
   });
   $('#adminOv').addEventListener('keydown', function (e) {
     if (e.key === 'Enter' && e.target.id === 'adCode') { e.preventDefault(); adCheck(); }
@@ -667,6 +1179,8 @@
     if (!db || !uid) { licFailed = true; applyGate(); return; }
     try { var u2 = await window.SCreditsStore.use('user'); isOwner = !!(u2 && await u2.isOwner()); } catch (e) { isOwner = false; }
     watchLicense(db);
+    watchProfile(db);
+    loadDemande();
     if (db && uid) {
       mode = 'cloud';
       col = db.collection('data/users/' + uid);
