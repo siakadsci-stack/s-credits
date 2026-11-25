@@ -10,6 +10,8 @@
   var filter = 'all';
   var query = '';
   var openIds = {};
+  var addOpen = {};
+  var dupChoice = null;
   var confirmDel = null;
   var alerted = {};
   var lastDay = '';
@@ -28,6 +30,14 @@
     return String(s == null ? '' : s).replace(/[&<>"']/g, function (ch) {
       return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch];
     });
+  }
+  function ajoutsSum(c) { return round2((c.ajouts || []).reduce(function (s, a) { return s + a.montant; }, 0)); }
+  function initialAmount(c) { return round2(c.total - ajoutsSum(c)); }
+  function digitsOnly(t) { return String(t || '').replace(/\D/g, ''); }
+  function sameClient(a, b) {
+    var ta = digitsOnly(a.tel), tb = digitsOnly(b.tel);
+    if (ta.length >= 8 && tb.length >= 8) return ta.slice(-8) === tb.slice(-8);
+    return String(a.nom || '').trim().toLowerCase() === String(b.nom || '').trim().toLowerCase() && !!String(a.nom || '').trim();
   }
   function round2(x) { return Math.round(x * 100) / 100; }
   function paid(c) { return round2(c.versements.reduce(function (s, v) { return s + v.montant; }, 0)); }
@@ -67,6 +77,7 @@
     queue = queue.then(fn).catch(function () { toast("L'enregistrement a échoué. Vérifiez votre connexion et réessayez."); });
   }
   function commit(c) {
+    c.ajouts = Array.isArray(c.ajouts) ? c.ajouts : [];
     var i = credits.findIndex(function (x) { return x.id === c.id; });
     if (i >= 0) credits[i] = c; else credits.push(c);
     if (col) { var copy = clone(c); enqueue(function () { return col.doc(copy.id).set(copy); }); }
@@ -83,6 +94,7 @@
   function normalize(c) {
     c.versements = Array.isArray(c.versements) ? c.versements : [];
     c.total = Number(c.total) || 0;
+    c.ajouts = Array.isArray(c.ajouts) ? c.ajouts : [];
     c.pieces = c.pieces || { recto: false, verso: false };
     return c;
   }
@@ -195,6 +207,15 @@
     });
   }
 
+  function addCreditHtml(c) {
+    var def = c.rappel && c.rappel >= todayIso() ? c.rappel : addDays(todayIso(), 7);
+    return '<div class="addbox"><p class="rappel">Le client prend un nouveau crédit : le montant est ajouté à son crédit actuel (total dû : <strong>' + nf(c.total) + ' FCFA</strong>, reste : <strong>' + nf(reste(c)) + ' FCFA</strong>).</p>' +
+      '<div class="row-edit"><label>Montant du nouveau crédit (FCFA)<input id="ac-m-' + c.id + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Ex. 25000"></label>' +
+      '<label>Pour quoi ? (facultatif)<input id="ac-l-' + c.id + '" type="text" autocomplete="off" placeholder="Ex. Marchandise du 12 novembre"></label>' +
+      '<label>Nouvelle date de rappel<input id="ac-d-' + c.id + '" type="date" value="' + def + '"></label></div>' +
+      '<div class="pay"><button class="btn btn-primary btn-small" type="button" data-act="addyes" data-id="' + c.id + '">Ajouter au crédit</button>' +
+      '<button class="btn btn-small" type="button" data-act="addno" data-id="' + c.id + '">Annuler</button></div></div>';
+  }
   function cardHtml(c) {
     var st = status(c), r = reste(c), p = paid(c);
     var pct = c.total > 0 ? Math.min(100, Math.round(p / c.total * 100)) : 0;
@@ -218,9 +239,13 @@
       (r > 0 ? '<div class="pay"><input id="p-' + c.id + '" type="number" inputmode="decimal" min="0" step="any" placeholder="Montant reçu" aria-label="Montant du versement de ' + esc(c.nom) + '" data-pay="' + c.id + '">' +
         '<button class="btn btn-primary btn-small" type="button" data-act="pay" data-id="' + c.id + '">Enregistrer le versement</button>' +
         '<button class="btn btn-small" type="button" data-act="settle" data-id="' + c.id + '">Tout solder</button></div>' : '') +
-      '<div class="send-row"><button class="btn btn-small btn-wa" type="button" data-act="stmt" data-id="' + c.id + '">Envoyer le point par WhatsApp</button></div>' +
+      '<div class="send-row"><button class="btn btn-small btn-wa" type="button" data-act="stmt" data-id="' + c.id + '">Envoyer le point par WhatsApp</button>' +
+        '<button class="btn btn-small" type="button" data-act="addcredit" data-id="' + c.id + '" aria-expanded="' + !!addOpen[c.id] + '">Ajouter un crédit</button></div>' +
+      (addOpen[c.id] ? addCreditHtml(c) : '') +
       '<button class="link toggle" type="button" data-act="toggle" data-id="' + c.id + '" aria-expanded="' + open + '">' + (open ? 'Masquer les détails' : 'Historique et réglages') + '</button>' +
       '<div class="details"' + (open ? '' : ' hidden') + '>' +
+        (c.ajouts.length ? '<div><h4>Crédits</h4><ul class="hist"><li><span class="d">Crédit initial' + (c.createdAt ? ' · ' + fmtDate(c.createdAt) : '') + '</span><span class="num">' + nf(initialAmount(c)) + ' FCFA</span></li>' +
+          c.ajouts.map(function (a, i) { return '<li><span class="d">' + fmtDate(a.date) + (a.label ? ' · ' + esc(a.label) : ' · Crédit ajouté') + '</span><span class="num">+ ' + nf(a.montant) + ' FCFA</span><button class="link link-danger" type="button" data-act="rmaj" data-id="' + c.id + '" data-i="' + i + '">Retirer</button></li>'; }).join('') + '</ul></div>' : '') +
         '<div><h4>Versements reçus</h4>' + hist + '</div>' +
         '<div><h4>Pièce d\'identité</h4><div class="pieces" id="pc-' + c.id + '">' + piecesHtml(c) + '</div></div>' +
         '<div class="row-edit"><label>Date de rappel<input id="rd-' + c.id + '" type="date" value="' + c.rappel + '"></label>' +
@@ -316,6 +341,12 @@
     L.push('Bonjour ' + c.nom + ',');
     L.push('Voici le point de votre crédit au ' + fmtDate(todayIso()) + '.');
     L.push('');
+    if (c.ajouts && c.ajouts.length) {
+      L.push('*Détail des crédits :*');
+      L.push('1. ' + (c.createdAt ? fmtDate(c.createdAt) + ' : ' : '') + money(initialAmount(c)) + ' (crédit initial)');
+      c.ajouts.forEach(function (a, i) { L.push((i + 2) + '. ' + fmtDate(a.date) + ' : ' + money(a.montant) + (a.label ? ' (' + a.label + ')' : '')); });
+      L.push('');
+    }
     L.push('*Montant total dû :* ' + money(c.total));
     L.push('');
     if (pays.length) {
@@ -345,7 +376,8 @@
   function drawStatement(cv, c, sender) {
     var W = 720, P = 40, SC = 2, FONT = '"IBM Plex Sans","Segoe UI",system-ui,sans-serif';
     var pays = sortedPays(c), r = reste(c);
-    var H = 524 + 46 * (Math.max(pays.length, 1) + 1);
+    var nAj = (c.ajouts || []).length;
+    var H = 524 + 46 * (Math.max(pays.length, 1) + 1) + (nAj ? 46 * (nAj + 1) : 0);
     cv.width = W * SC; cv.height = H * SC;
     var x = cv.getContext('2d');
     x.scale(SC, SC);
@@ -378,7 +410,11 @@
       y += 46;
       x.fillStyle = '#D3DCD9'; x.fillRect(P, y - 1, W - 2 * P, 1);
     }
-    row(c.createdAt ? fmtDate(c.createdAt) : '', 'Montant total dû', money(c.total), true);
+    if (nAj) {
+      row(c.createdAt ? fmtDate(c.createdAt) : '', 'Crédit initial', money(initialAmount(c)), false);
+      c.ajouts.forEach(function (a) { row(fmtDate(a.date), a.label || 'Crédit ajouté', '+ ' + money(a.montant), false); });
+      row('', 'Montant total dû', money(c.total), true);
+    } else row(c.createdAt ? fmtDate(c.createdAt) : '', 'Montant total dû', money(c.total), true);
     pays.forEach(function (v) { row(fmtDate(v.date), v.label || 'Versement reçu', money(v.montant), false); });
     if (!pays.length) {
       x.fillStyle = '#586B66'; x.font = 'italic 400 16px ' + FONT; x.fillText('Aucun versement pour le moment.', P + 12, y + 28); y += 46;
@@ -532,6 +568,27 @@
       }).catch(function () { toast('Impossible de retirer la photo. Réessayez.'); });
       return;
     }
+    if (act === 'addcredit') { addOpen[id] = !addOpen[id]; render(); if (addOpen[id]) { var mi = document.getElementById('ac-m-' + id); if (mi) mi.focus(); } return; }
+    if (act === 'addno') { delete addOpen[id]; render(); return; }
+    if (act === 'addyes') {
+      var am = round2(Number((document.getElementById('ac-m-' + id) || {}).value));
+      var al = ((document.getElementById('ac-l-' + id) || {}).value || '').trim();
+      var ad = (document.getElementById('ac-d-' + id) || {}).value;
+      if (!(am > 0)) { toast('Saisissez le montant du nouveau crédit.'); return; }
+      if (!ad) { toast('Choisissez la nouvelle date de rappel.'); return; }
+      c.total = round2(c.total + am);
+      c.ajouts.push({ date: todayIso(), montant: am, label: al });
+      c.rappel = ad;
+      delete addOpen[id]; openIds[id] = true;
+      commit(c); toast('Crédit ajouté. Nouveau reste à payer : ' + nf(reste(c)) + ' FCFA'); return;
+    }
+    if (act === 'rmaj') {
+      var ai = Number(b.dataset.i), ao = c.ajouts[ai];
+      if (!ao) return;
+      if (round2(c.total - ao.montant) < paid(c)) { toast('Impossible : les versements reçus dépassent le total une fois ce crédit retiré. Retirez d\'abord un versement.'); return; }
+      c.total = round2(c.total - ao.montant); c.ajouts.splice(ai, 1);
+      commit(c); toast('Crédit retiré du total'); return;
+    }
     if (act === 'rmv') { c.versements.splice(Number(b.dataset.i), 1); commit(c); toast('Versement retiré'); return; }
     if (act === 'delay') { c.rappel = addDays(todayIso(), 7); commit(c); toast('Rappel reporté au ' + fmtDate(c.rappel)); return; }
     if (act === 'setdate') {
@@ -596,8 +653,27 @@
     $('#btnNew').setAttribute('aria-expanded', String(open));
     if (open) { $('#fNom').focus(); $('#formPanel').scrollIntoView({ behavior: 'smooth', block: 'start' }); }
   }
+  function hideDup() { var d = $('#dupBox'); d.hidden = true; d.innerHTML = ''; }
+  function showDup(c) {
+    var d = $('#dupBox');
+    d.innerHTML = '<p><strong>' + esc(c.nom) + '</strong> a déjà un crédit' + (reste(c) > 0 ? ' en cours : reste <strong>' + nf(reste(c)) + ' FCFA</strong> à payer.' : ' (soldé).') +
+      ' Voulez-vous ajouter ce nouveau montant à son crédit pour avoir un seul montant dû global ?</p>' +
+      '<div class="pay"><button class="btn btn-primary btn-small" type="button" data-dup="merge">Ajouter à son crédit</button>' +
+      '<button class="btn btn-small" type="button" data-dup="separate">Créer un crédit séparé</button>' +
+      '<button class="btn btn-small" type="button" data-dup="cancel">Annuler</button></div>';
+    d.hidden = false;
+    d.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+  $('#dupBox').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-dup]'); if (!b) return;
+    if (b.dataset.dup === 'cancel') { dupChoice = null; hideDup(); return; }
+    dupChoice = b.dataset.dup;
+    $('#form button[type="submit"]').click();
+  });
+  $('#fNom').addEventListener('input', function () { dupChoice = null; hideDup(); });
+  $('#fTel').addEventListener('input', function () { dupChoice = null; hideDup(); });
   $('#btnNew').addEventListener('click', function () { openForm($('#formPanel').hidden); });
-  $('#btnCancel').addEventListener('click', function () { $('#form').reset(); updateLive(); $('#formError').textContent = ''; openForm(false); });
+  $('#btnCancel').addEventListener('click', function () { dupChoice = null; hideDup(); $('#form').reset(); updateLive(); $('#formError').textContent = ''; openForm(false); });
   document.querySelectorAll('[data-add]').forEach(function (b) {
     b.addEventListener('click', function () { $('#fRappel').value = addDays(todayIso(), Number(b.dataset.add)); });
   });
@@ -619,8 +695,34 @@
     if (avance < 0 || avance > total) { err.textContent = "L'avance ne peut pas dépasser le montant total dû."; $('#fAvance').focus(); return; }
     if (!rappel) { err.textContent = 'Choisissez la date de rappel de recouvrement.'; $('#fRappel').focus(); return; }
     err.textContent = '';
+    var telVal = $('#fTel').value.trim();
+    var dup = credits.filter(function (x) { return sameClient({ nom: nom, tel: telVal }, x); }).sort(function (a, b) { return reste(b) - reste(a); })[0];
+    if (dup && !dupChoice) { showDup(dup); return; }
+    var choice = dupChoice; dupChoice = null; hideDup();
     var sbtn = $('#form button[type="submit"]');
     sbtn.disabled = true;
+    if (choice === 'merge' && dup) {
+      var mg = clone(dup);
+      mg.total = round2(mg.total + total);
+      mg.ajouts.push({ date: todayIso(), montant: total, label: $('#fNote').value.trim() });
+      if (avance > 0) mg.versements.push({ date: todayIso(), montant: avance, label: 'Avance' });
+      mg.rappel = rappel;
+      if (!mg.tel && telVal) mg.tel = telVal;
+      mg.pieces = mg.pieces || { recto: false, verso: false };
+      var mfiles = { recto: $('#fRecto').files[0], verso: $('#fVerso').files[0] };
+      for (var k = 0; k < SIDES.length; k++) {
+        var sd = SIDES[k][0];
+        if (!mfiles[sd] || mg.pieces[sd]) continue;
+        try { await pieceSave(mg.id, sd, await compress(mfiles[sd])); mg.pieces[sd] = true; }
+        catch (ex2) { toast("La photo (" + SIDES[k][1].toLowerCase() + ") n'a pas pu être enregistrée."); }
+      }
+      openIds[mg.id] = true;
+      commit(mg);
+      sbtn.disabled = false;
+      $('#form').reset(); updateLive(); openForm(false);
+      toast('Ajouté au crédit de ' + mg.nom + '. Reste à payer : ' + nf(reste(mg)) + ' FCFA');
+      return;
+    }
     var cid = newId();
     var pieces = { recto: false, verso: false };
     var files = { recto: $('#fRecto').files[0], verso: $('#fVerso').files[0] };
@@ -683,6 +785,7 @@
       h += '<a class="btn btn-wa" target="_blank" rel="noopener" href="' + wa + '">' + buy + ' pour ' + money(CFG.prix) + ' (WhatsApp)</a>';
     }
     if (CFG.serveur && (lstate === 'none' || lstate === 'expired')) h += raHtml();
+    if (syncOn() && (lstate === 'none' || lstate === 'expired')) h += '<button class="btn" type="button" data-sy="open" data-v="login">J\'ai déjà un compte de sauvegarde : me connecter</button>';
     if (isOwner && lstate !== 'loading') h += '<button class="btn" type="button" data-adm="open">Espace administrateur</button>';
     $('#lock').innerHTML = '<div class="lock-card"><div class="lockup lock-brand">' + logoSvg(96) + '<span class="wordmark" aria-hidden="true">crédits</span></div>' + h + '</div>';
   }
@@ -697,6 +800,9 @@
       if (prevState !== 'ok' && loaded) { render(); checkDue(); }
     }
     $('#btnAdmin').hidden = !(ok && isOwner);
+    $('#btnSync').hidden = !(ok && syncOn());
+    $('#btnExport').hidden = !ok;
+    if (ok && prevState !== 'ok' && !$('#syncOv').hidden) closeSync();
     renderParrainBtn();
     if (!$('#adminOv').hidden) updateAdStatus();
     prevState = lstate;
@@ -709,6 +815,7 @@
       licenseKnown = true; licFailed = false;
       clearTimeout(t);
       applyGate();
+      setTimeout(function () { if (typeof syncLicence === 'function') syncLicence(); }, 1500);
     }, function () { licFailed = true; applyGate(); });
   }
 
@@ -837,8 +944,32 @@
     db.doc('license/profil').onSnapshot(function (s) {
       profile = s.exists ? s.data() : null;
       renderParrainBtn();
+      setTimeout(syncLicence, 1500);
     }, function () { /* profil illisible : le bouton reste masqué */ });
   }
+  /* Date de licence réglée depuis le tableau : l'administrateur impose une date exacte, appliquée une fois */
+  var lastSync = 0, syncBusy = false;
+  async function syncLicence(force) {
+    if (syncBusy || !CFG.serveur || !profile || !profile.code || !licenseKnown) return;
+    if (!force && Date.now() - lastSync < 600000) return;
+    syncBusy = true;
+    try {
+      var cur = (license && license.expiresAt) || '';
+      var res = await srvPost({ action: 'sync_licence', code: profile.code, expiresAt: cur });
+      if (res && res.ok) {
+        lastSync = Date.now();
+        var imp = res.imposee;
+        if (imp && /^\d{4}-\d{2}-\d{2}$/.test(imp) && imp !== cur) {
+          if (await writeLicense({ expiresAt: imp })) {
+            toast("L'administrateur a réglé votre licence : valable jusqu'au " + fmtDate(imp) + '.');
+            try { await srvPost({ action: 'sync_licence', code: profile.code, expiresAt: imp, ack: imp }); } catch (e) { /* confirmé à la prochaine connexion */ }
+          }
+        }
+      }
+    } catch (e) { /* hors ligne : réessayé plus tard */ }
+    syncBusy = false;
+  }
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) syncLicence(); });
   function renderParrainBtn() { var b = $('#btnParrain'); if (b) b.hidden = !(profile && profile.code && lstate === 'ok'); }
 
   function welcomeText(s, exp) {
@@ -1068,6 +1199,256 @@
     else if (a === 'check') raCheck();
     else if (a === 'cancel') { raClear().then(function () { raSet({ view: 'home', msg: '' }); }); }
   });
+
+  /* Sauvegarde en ligne et autres appareils (voir sync.js) */
+  var SYNC = window.SCreditsSync;
+  var sy = { view: 'login', busy: false, msg: '', outAsk: false };
+  function syncOn() { return !!(SYNC && SYNC.enabled); }
+  function closeSync() { $('#syncOv').hidden = true; $('#syDialog').innerHTML = ''; sy.msg = ''; sy.outAsk = false; }
+  function openSync(view) {
+    if (!syncOn()) return;
+    if (view) sy.view = view;
+    $('#syncOv').hidden = false; syRender();
+  }
+  function hhmm(ms) { var d = new Date(ms); return pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function syRender() {
+    if ($('#syncOv').hidden) return;
+    var st = SYNC.state(), h = '';
+    if (st.signedIn && !st.needLogin) {
+      var line = st.busy ? 'Synchronisation en cours…' : st.error ? esc(st.error) : st.pending ? st.pending + ' modification' + (st.pending > 1 ? 's' : '') + ' en attente d\'envoi.' : st.lastSync ? 'Tout est synchronisé (' + hhmm(st.lastSync) + ').' : 'En attente de la première synchronisation…';
+      h = '<h2 id="syTitle">Sauvegarde en ligne</h2><p>Compte : <strong>+' + esc(st.phone) + '</strong></p><p class="' + (st.error ? 'form-error' : 'hint') + '" role="status">' + line + '</p>' +
+        '<p class="hint">Vos crédits, versements, photos et votre licence sont copiés dans ce compte. Pour les retrouver sur un autre appareil : installez S crédits, puis « Me connecter » avec le même téléphone et le même code.</p>';
+      if (st.devices && st.devices.length) {
+        h += '<h3>Appareils connectés (' + st.devices.length + ' sur ' + SYNC.maxDevices + ' autorisés)</h3><ul class="hist">' + st.devices.map(function (d) {
+          var me = d.id === st.deviceId;
+          return '<li><span class="d">' + esc(d.name || 'Appareil') + (me ? ' (cet appareil)' : '') + (d.seen ? ' · vu le ' + esc(d.seen) : '') + '</span>' + (me ? '' : '<button class="link link-danger" type="button" data-sy="rmdev" data-id="' + esc(d.id) + '">Retirer</button>') + '</li>';
+        }).join('') + '</ul>';
+      }
+      h += '<div class="chips"><button class="btn btn-primary" type="button" data-sy="now"' + (st.busy ? ' disabled' : '') + '>Synchroniser maintenant</button><button class="btn" type="button" data-sy="close">Fermer</button></div>';
+      h += sy.outAsk
+        ? '<div class="dupbox"><p>Se déconnecter ? Les données restent sur cet appareil mais ne seront plus synchronisées, et la place est libérée pour un autre appareil.</p><div class="pay"><button class="btn btn-small btn-danger" type="button" data-sy="outyes">Oui, me déconnecter</button><button class="btn btn-small" type="button" data-sy="outno">Annuler</button></div></div>'
+        : '<button class="link link-danger" type="button" data-sy="out">Se déconnecter</button>';
+    } else {
+      var signup = sy.view === 'signup';
+      h = '<h2 id="syTitle">Sauvegarde en ligne</h2>' +
+        (st.needLogin ? '<p class="form-error">Votre session a expiré : reconnectez-vous avec votre code.</p>' : '') +
+        (st.notice ? '<p class="form-error">' + esc(st.notice) + '</p>' : '') +
+        '<div class="chips"><button class="chip" type="button" data-sy="tab" data-v="login" aria-pressed="' + !signup + '">Me connecter</button><button class="chip" type="button" data-sy="tab" data-v="signup" aria-pressed="' + signup + '">Créer mon compte</button></div>' +
+        '<p class="hint">' + (signup ? 'Créez un compte avec votre téléphone et un code secret : vos données seront copiées en ligne et récupérables sur un autre appareil.' : 'Retrouvez vos données sur cet appareil avec le téléphone et le code de votre compte.') + '</p>' +
+        '<div class="row-edit"><label>Votre téléphone<input id="syPhone" type="tel" inputmode="tel" autocomplete="off" placeholder="Ex. 07 00 00 00 00" value="' + esc(sy.phone || (profile && profile.tel) || '') + '"></label>' +
+        '<label>Code secret (6 à 12 chiffres)<input id="syPin" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="••••••"></label>' +
+        (signup ? '<label>Répétez le code<input id="syPin2" type="password" inputmode="numeric" autocomplete="off" maxlength="12" placeholder="••••••"></label>' : '') + '</div>' +
+        (signup ? '<p class="hint"><strong>Gardez bien ce code :</strong> il ne peut pas être retrouvé s\'il est oublié.</p>' : '') +
+        '<p class="form-error" role="alert">' + esc(sy.msg) + '</p>' +
+        '<div class="chips"><button class="btn btn-primary" type="button" data-sy="go"' + (sy.busy ? ' disabled' : '') + '>' + (sy.busy ? 'Un instant…' : signup ? 'Créer mon compte' : 'Me connecter') + '</button><button class="btn" type="button" data-sy="close">Fermer</button></div>';
+    }
+    $('#syDialog').innerHTML = h;
+  }
+  async function syGo() {
+    if (sy.busy) return;
+    var phone = ($('#syPhone').value || '').trim(), pin = ($('#syPin').value || '').trim(), signup = sy.view === 'signup';
+    sy.phone = phone;
+    if (signup && pin !== ($('#syPin2').value || '').trim()) { sy.msg = 'Les deux codes sont différents.'; return syRender(); }
+    sy.busy = true; sy.msg = ''; syRender();
+    try {
+      if (signup) await SYNC.signUp(phone, pin); else await SYNC.signIn(phone, pin);
+      sy.busy = false; sy.msg = '';
+      toast(signup ? 'Compte créé : vos données sont sauvegardées en ligne.' : 'Connecté : vos données ont été récupérées.');
+      if (lstate === 'ok' || SYNC.state().signedIn) syRender();
+    } catch (e) { sy.busy = false; sy.msg = (e && e.message) || 'Connexion impossible.'; syRender(); }
+  }
+  if (syncOn()) SYNC.onChange(function () { syRender(); });
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-sy]'); if (!b || !syncOn()) return;
+    var a = b.dataset.sy;
+    if (a === 'open') openSync(b.dataset.v);
+    else if (a === 'close') closeSync();
+    else if (a === 'tab') { sy.view = b.dataset.v; sy.msg = ''; syRender(); }
+    else if (a === 'go') syGo();
+    else if (a === 'now') SYNC.syncNow();
+    else if (a === 'out') { sy.outAsk = true; syRender(); }
+    else if (a === 'outno') { sy.outAsk = false; syRender(); }
+    else if (a === 'outyes') { sy.outAsk = false; SYNC.signOut().then(function () { toast('Déconnecté'); syRender(); }); }
+    else if (a === 'rmdev') SYNC.removeDevice(b.dataset.id).then(function () { toast('Appareil retiré'); }, function (er) { toast((er && er.message) || 'Impossible de retirer cet appareil.'); });
+  });
+  $('#syncOv').addEventListener('keydown', function (e) { if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); syGo(); } if (e.key === 'Escape') closeSync(); });
+
+  /* Exportation : fichier Excel (.xlsx) et PDF de tous les crédits, pour garder une copie de secours */
+  function fnum(n) { return String(Math.round(Number(n) || 0)).replace(/\B(?=(\d{3})+(?!\d))/g, ' '); }
+  function sd(iso) { iso = String(iso || ''); return /^\d{4}-\d{2}-\d{2}/.test(iso) ? iso.slice(8, 10) + '/' + iso.slice(5, 7) + '/' + iso.slice(0, 4) : iso; }
+  function exportData() {
+    var list = credits.slice().sort(function (a, b) { return String(a.nom).localeCompare(String(b.nom), 'fr'); });
+    var sum = list.map(function (c) {
+      return { c: c, nom: c.nom, tel: c.tel || '', total: c.total, paid: paid(c), reste: reste(c), rappel: c.rappel ? sd(c.rappel) : '', cree: c.createdAt ? sd(c.createdAt) : '', statut: reste(c) <= 0 ? 'Soldé' : 'En cours', note: c.note || '' };
+    });
+    var moves = [];
+    list.forEach(function (c) {
+      var m = [{ d: c.createdAt || '', type: 'Crédit initial', label: '', montant: initialAmount(c) }];
+      (c.ajouts || []).forEach(function (a) { m.push({ d: a.date, type: 'Crédit ajouté', label: a.label || '', montant: a.montant }); });
+      (c.versements || []).forEach(function (v) { m.push({ d: v.date, type: 'Versement', label: v.label || '', montant: v.montant }); });
+      m.sort(function (x, y) { return String(x.d).localeCompare(String(y.d)); });
+      m.forEach(function (x) { moves.push({ nom: c.nom, tel: c.tel || '', date: x.d ? sd(x.d) : '', type: x.type, label: x.label, montant: x.montant }); });
+    });
+    return { sum: sum, moves: moves };
+  }
+  /* --- ZIP minimal (sans compression) pour fabriquer le .xlsx --- */
+  var CRC_T = null;
+  function crc32(u8) {
+    if (!CRC_T) { CRC_T = []; for (var n = 0; n < 256; n++) { var c = n; for (var k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; CRC_T[n] = c >>> 0; } }
+    var crc = 0xFFFFFFFF;
+    for (var i = 0; i < u8.length; i++) crc = CRC_T[(crc ^ u8[i]) & 255] ^ (crc >>> 8);
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  function zipStore(files) {
+    var enc = new TextEncoder(), parts = [], central = [], offset = 0, now = new Date();
+    var dt = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+    function u16(v) { return [v & 255, (v >> 8) & 255]; }
+    function u32(v) { return [v & 255, (v >>> 8) & 255, (v >>> 16) & 255, (v >>> 24) & 255]; }
+    files.forEach(function (f) {
+      var name = enc.encode(f.name), data = enc.encode(f.data), crc = crc32(data);
+      var head = [0x50, 0x4B, 3, 4].concat(u16(20), u16(0x0800), u16(0), u16(0), u16(dt), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0));
+      parts.push(new Uint8Array(head), name, data);
+      central.push(new Uint8Array([0x50, 0x4B, 1, 2].concat(u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(dt), u32(crc), u32(data.length), u32(data.length), u16(name.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset))), name);
+      offset += head.length + name.length + data.length;
+    });
+    var csize = central.reduce(function (s, p) { return s + p.length; }, 0);
+    var end = new Uint8Array([0x50, 0x4B, 5, 6].concat(u16(0), u16(0), u16(files.length), u16(files.length), u32(csize), u32(offset), u16(0)));
+    var all = parts.concat(central, [end]), total = all.reduce(function (s, p) { return s + p.length; }, 0), out = new Uint8Array(total), pos = 0;
+    all.forEach(function (p) { out.set(p, pos); pos += p.length; });
+    return out;
+  }
+  function xesc(t) { return String(t == null ? '' : t).replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F]/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+  function colL(i) { return String.fromCharCode(65 + i); }
+  function sheetXml(rows, widths) {
+    var x = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>' +
+      widths.map(function (w, i) { return '<col min="' + (i + 1) + '" max="' + (i + 1) + '" width="' + w + '" customWidth="1"/>'; }).join('') + '</cols><sheetData>';
+    rows.forEach(function (row, r) {
+      x += '<row r="' + (r + 1) + '">';
+      row.forEach(function (cell, i) {
+        var ref = colL(i) + (r + 1);
+        if (cell === null || cell === undefined || cell === '') return;
+        if (typeof cell === 'object') x += '<c r="' + ref + '" s="' + (cell.s || 0) + '">' + (cell.f ? '<f>' + xesc(cell.f) + '</f>' : '') + '<v>' + cell.v + '</v></c>';
+        else if (typeof cell === 'number') x += '<c r="' + ref + '" s="2"><v>' + cell + '</v></c>';
+        else x += '<c r="' + ref + '" t="inlineStr" s="' + (r === 0 ? 1 : 0) + '"><is><t xml:space="preserve">' + xesc(cell) + '</t></is></c>';
+      });
+      x += '</row>';
+    });
+    return x + '</sheetData></worksheet>';
+  }
+  function buildXlsx() {
+    var d = exportData(), n = d.sum.length;
+    var r1 = [['Client', 'Téléphone', 'Total dû (FCFA)', 'Versé (FCFA)', 'Reste à payer (FCFA)', 'Prochain rappel', 'Créé le', 'Statut', 'Note']];
+    d.sum.forEach(function (s) { r1.push([s.nom, s.tel, s.total, s.paid, s.reste, s.rappel, s.cree, s.statut, s.note]); });
+    var T = function (col) { return { s: 3, f: 'SUM(' + col + '2:' + col + (n + 1) + ')', v: d.sum.reduce(function (a, s) { return a + (col === 'C' ? s.total : col === 'D' ? s.paid : s.reste); }, 0) }; };
+    if (n) r1.push([{ s: 3, v: 0 }].slice(0, 0).concat(['TOTAL', '', T('C'), T('D'), T('E')]));
+    var r2 = [['Client', 'Téléphone', 'Date', 'Opération', 'Détail', 'Montant (FCFA)']];
+    d.moves.forEach(function (m) { r2.push([m.nom, m.tel, m.date, m.type, m.label, m.montant]); });
+    var NS = 'xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"';
+    return zipStore([
+      { name: '[Content_Types].xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>' },
+      { name: '_rels/.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>' },
+      { name: 'xl/workbook.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook ' + NS + ' xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Crédits" sheetId="1" r:id="rId1"/><sheet name="Mouvements" sheetId="2" r:id="rId2"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/><Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>' },
+      { name: 'xl/styles.xml', data: '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet ' + NS + '><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFE3EFEC"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="0" xfId="0" applyFont="1" applyFill="1"/><xf numFmtId="3" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/><xf numFmtId="3" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1" applyNumberFormat="1"/></cellXfs></styleSheet>' },
+      { name: 'xl/worksheets/sheet1.xml', data: sheetXml(r1, [26, 16, 16, 16, 20, 16, 14, 11, 34]) },
+      { name: 'xl/worksheets/sheet2.xml', data: sheetXml(r2, [26, 16, 14, 16, 30, 16]) }
+    ]);
+  }
+  /* --- PDF minimal (texte) --- */
+  function pdfText(t) {
+    var s = String(t == null ? '' : t).replace(/[‘’]/g, "'").replace(/[“”]/g, '"').replace(/[–—]/g, '-').replace(/[  ]/g, ' ').replace(/œ/g, 'oe').replace(/Œ/g, 'OE');
+    var o = '';
+    for (var i = 0; i < s.length; i++) { var ch = s.charCodeAt(i); o += ch > 255 ? '?' : s.charAt(i); }
+    return o.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');
+  }
+  function pad2(s, w, right) { s = String(s); if (s.length > w) s = s.slice(0, w - 1) + '.'; var sp = new Array(w - s.length + 1).join(' '); return right ? sp + s : s + sp; }
+  function buildPdf() {
+    var d = exportData(), pages = [], cur = null, y = 0, LH = 13.5, SZ = 9, CW = 0.6 * SZ;
+    var today = sd(todayIso());
+    function newPage() { cur = []; pages.push(cur); y = 800; }
+    function txt(x, yy, str, font, size) { cur.push('BT /' + font + ' ' + size + ' Tf ' + x.toFixed(1) + ' ' + yy.toFixed(1) + ' Td (' + pdfText(str) + ') Tj ET'); }
+    function rule(yy) { cur.push('0.6 w 40 ' + yy.toFixed(1) + ' m 555 ' + yy.toFixed(1) + ' l S'); }
+    function line(str, bold) { if (y < 60) { newPage(); } txt(40, y, str, bold ? 'F4' : 'F3', SZ); y -= LH; }
+    newPage();
+    txt(40, y, 'S credits', 'F2', 20); y -= 22;
+    txt(40, y, 'Situation de tous les credits au ' + today, 'F1', 11); y -= 26;
+    var tT = 0, tP = 0, tR = 0; d.sum.forEach(function (s) { tT += s.total; tP += s.paid; tR += s.reste; });
+    txt(40, y, 'Clients : ' + d.sum.length + '     Total du : ' + fnum(tT) + ' FCFA     Verse : ' + fnum(tP) + ' FCFA', 'F2', 10); y -= 15;
+    txt(40, y, 'Reste a payer : ' + fnum(tR) + ' FCFA', 'F2', 12); y -= 22;
+    var head = pad2('Client', 22) + ' ' + pad2('Telephone', 12) + ' ' + pad2('Total', 11, 1) + ' ' + pad2('Verse', 11, 1) + ' ' + pad2('Reste', 11, 1) + ' ' + pad2('Rappel', 10);
+    function tableHead() { line(head, true); rule(y + 9); y -= 2; }
+    tableHead();
+    d.sum.forEach(function (s) {
+      if (y < 60) { newPage(); tableHead(); }
+      line(pad2(s.nom, 22) + ' ' + pad2(s.tel, 12) + ' ' + pad2(fnum(s.total), 11, 1) + ' ' + pad2(fnum(s.paid), 11, 1) + ' ' + pad2(fnum(s.reste), 11, 1) + ' ' + pad2(s.reste <= 0 ? 'Solde' : s.rappel, 10));
+    });
+    rule(y + 9); y -= 2;
+    line(pad2('TOTAL', 35) + ' ' + pad2(fnum(tT), 11, 1) + ' ' + pad2(fnum(tP), 11, 1) + ' ' + pad2(fnum(tR), 11, 1), true);
+    if (d.sum.length) {
+      newPage(); txt(40, y, 'Detail par client', 'F2', 14); y -= 24;
+      d.sum.forEach(function (s) {
+        var m = d.moves.filter(function (x) { return x.nom === s.nom && x.tel === s.tel; });
+        if (y < 110) newPage();
+        txt(40, y, s.nom + (s.tel ? '  -  ' + s.tel : ''), 'F2', 10.5); y -= 14;
+        line('Total du ' + fnum(s.total) + '   Verse ' + fnum(s.paid) + '   Reste ' + fnum(s.reste) + ' FCFA' + (s.note ? '   (' + s.note + ')' : ''), true);
+        m.forEach(function (x) { line('  ' + pad2(x.date, 10) + '  ' + pad2(x.type, 14) + ' ' + pad2(x.label, 24) + ' ' + pad2((x.type === 'Versement' ? '-' : '+') + fnum(x.montant), 12, 1)); });
+        y -= 8;
+      });
+    }
+    pages.forEach(function (p, i) { p.push('BT /F3 8 Tf 40 28 Td (' + pdfText('S credits - page ' + (i + 1) + '/' + pages.length) + ') Tj ET'); });
+    var objs = [], n = 4 + 2 * pages.length;
+    var kids = pages.map(function (p, i) { return (5 + i * 2) + ' 0 R'; }).join(' ');
+    objs[1] = '<< /Type /Catalog /Pages 2 0 R >>';
+    objs[2] = '<< /Type /Pages /Kids [' + kids + '] /Count ' + pages.length + ' >>';
+    objs[3] = '<< /F1 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >> /F2 << /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >> /F3 << /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >> /F4 << /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold /Encoding /WinAnsiEncoding >> >>';
+    objs[4] = '<< /Producer (S credits) >>';
+    pages.forEach(function (p, i) {
+      var c = p.join('\n');
+      objs[5 + i * 2] = '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font 3 0 R >> /Contents ' + (6 + i * 2) + ' 0 R >>';
+      objs[6 + i * 2] = '<< /Length ' + c.length + ' >>\nstream\n' + c + '\nendstream';
+    });
+    var out = '%PDF-1.4\n', offs = [];
+    for (var i = 1; i <= n; i++) { offs[i] = out.length; out += i + ' 0 obj\n' + objs[i] + '\nendobj\n'; }
+    var xref = out.length;
+    out += 'xref\n0 ' + (n + 1) + '\n0000000000 65535 f \n';
+    for (i = 1; i <= n; i++) out += ('0000000000' + offs[i]).slice(-10) + ' 00000 n \n';
+    out += 'trailer\n<< /Size ' + (n + 1) + ' /Root 1 0 R /Info 4 0 R >>\nstartxref\n' + xref + '\n%%EOF';
+    var u8 = new Uint8Array(out.length);
+    for (i = 0; i < out.length; i++) u8[i] = out.charCodeAt(i) & 255;
+    return u8;
+  }
+  function saveFile(bytes, fname, mime, title) {
+    var cap = window.Capacitor, CP = cap && cap.Plugins;
+    var native = !!(cap && typeof cap.isNativePlatform === 'function' && cap.isNativePlatform());
+    if (native && CP && CP.Filesystem && CP.Share) {
+      var bin = '', CH = 0x8000;
+      for (var i = 0; i < bytes.length; i += CH) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+      return CP.Filesystem.writeFile({ path: fname, data: btoa(bin), directory: 'CACHE' }).then(function (r) {
+        return CP.Share.share({ title: title, files: [r.uri], dialogTitle: title });
+      }).catch(function (e) { if (!/cancel/i.test(String((e && e.message) || e))) toast("Impossible de partager le fichier : " + ((e && e.message) || e)); });
+    }
+    var url = URL.createObjectURL(new Blob([bytes], { type: mime })), a = document.createElement('a');
+    a.href = url; a.download = fname; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 5000);
+    toast('Fichier enregistré : ' + fname);
+    return Promise.resolve();
+  }
+  function exportFile(kind) {
+    if (!credits.length) { toast("Aucun crédit à exporter."); return; }
+    var day = todayIso();
+    try {
+      if (kind === 'xlsx') saveFile(buildXlsx(), 'scredits-credits-' + day + '.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'Exportation des crédits');
+      else saveFile(buildPdf(), 'scredits-credits-' + day + '.pdf', 'application/pdf', 'Exportation des crédits');
+    } catch (e) { toast("L'exportation a échoué : " + ((e && e.message) || e)); }
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-ex]'); if (!b) return;
+    var a = b.dataset.ex;
+    if (a === 'open') { $('#exOv').hidden = false; $('#exCount').textContent = credits.length + ' client' + (credits.length > 1 ? 's' : ''); var bx = document.querySelector('#exOv [data-ex="xlsx"]'); if (bx) bx.hidden = CFG.excel === false; }
+    else if (a === 'close') $('#exOv').hidden = true;
+    else if (a === 'xlsx' || a === 'pdf') exportFile(a);
+  });
+  $('#exOv').addEventListener('keydown', function (e) { if (e.key === 'Escape') $('#exOv').hidden = true; });
 
   function openAdmin() {
     adStep = 'code'; adSale = null; renderAdmin();
