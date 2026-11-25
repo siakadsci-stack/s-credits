@@ -5,5 +5,11 @@ window.SCREDITS_CONFIG = {
   commission: 1000,  // commission du parrain en FCFA (identique à COMMISSION dans le script Google)
   jours: 365,        // durée de la licence achetée : 365 = 1 an
   serveur: 'https://script.google.com/macros/s/AKfycbyvvcjEVAhXcJ1NG0wiUDnFnYBZAGyHUm9CYmv4K3-GuPigp1FTXegvF9xnnYGdkbtDeQ/exec',       // lien « Application Web » de votre script Google (voir GUIDE-VENTE.md)
-  contact: '2250707129074'        // votre numéro WhatsApp de vente avec l'indicatif, sans + ni espaces (ex. '2250700000000')
+  contact: '2250707129074',       // votre numéro WhatsApp de vente avec l'indicatif, sans + ni espaces (ex. '2250700000000')
+
+  // Sauvegarde en ligne et connexion sur plusieurs appareils (voir GUIDE-FIREBASE.md).
+  // Laissez « null » pour une version sans sauvegarde en ligne. Pour l'activer, remplacez null par :
+  //   { apiKey: 'AIza...', projectId: 'mon-projet' }
+  firebase: null,
+  excel: false   // version 1 : export PDF uniquement (pas d'Excel)
 };
