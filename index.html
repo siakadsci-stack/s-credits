@@ -33,6 +33,8 @@
     </div>
     <div class="top-acts">
       <button class="btn" id="btnParrain" type="button" data-par="open" hidden>Parrainage</button>
+      <button class="btn" id="btnExport" type="button" data-ex="open" hidden>Exporter</button>
+      <button class="btn" id="btnSync" type="button" data-sy="open" hidden>Sauvegarde en ligne</button>
       <button class="btn" id="btnAdmin" type="button" data-adm="open" hidden>Administrateur</button>
       <button class="btn btn-primary" id="btnNew" type="button" aria-expanded="false" aria-controls="formPanel">+ Nouveau crédit</button>
     </div>
@@ -93,6 +95,7 @@
         <strong id="liveReste">0 FCFA</strong>
       </div>
       <p class="form-error" id="formError" role="alert"></p>
+      <div class="dupbox" id="dupBox" hidden></div>
       <div class="form-actions">
         <button class="btn btn-primary" type="submit">Enregistrer le crédit</button>
         <button class="btn" type="button" id="btnCancel">Annuler</button>
@@ -118,6 +121,18 @@
 
 <div class="overlay" id="overlay" role="alertdialog" aria-modal="true" aria-labelledby="ovTitle" hidden>
   <div class="dialog" id="dialog"></div>
+</div>
+<div class="overlay admin-ov" id="exOv" role="dialog" aria-modal="true" aria-labelledby="exTitle" hidden>
+  <div class="dialog admin">
+    <h2 id="exTitle">Exporter mes crédits</h2>
+    <p class="hint">Copie de secours de <strong id="exCount"></strong> : montants dus, versements, dates et rappels. Gardez-la sur une clé USB, un e-mail ou un autre appareil.</p>
+    <div class="chips"><button class="btn btn-primary" type="button" data-ex="xlsx">Fichier Excel (.xlsx)</button><button class="btn btn-primary" type="button" data-ex="pdf">Fichier PDF</button></div>
+    <p class="hint">Les photos de pièces d'identité ne sont pas incluses dans ces fichiers.</p>
+    <button class="btn" type="button" data-ex="close">Fermer</button>
+  </div>
+</div>
+<div class="overlay admin-ov" id="syncOv" role="dialog" aria-modal="true" aria-labelledby="syTitle" hidden>
+  <div class="dialog admin" id="syDialog"></div>
 </div>
 <div class="overlay admin-ov" id="adminOv" role="dialog" aria-modal="true" aria-labelledby="adTitle" hidden>
   <div class="dialog admin" id="adDialog"></div>
@@ -145,6 +160,7 @@
 </script>
 <script src="config.js"></script>
 <script src="store.js"></script>
+<script src="sync.js"></script>
 <script src="app.js"></script>
 <script>
   /* Fonctionnement hors ligne : le service worker ne s'active que sur http://localhost ou https:// */
