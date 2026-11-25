@@ -1,7 +1,7 @@
 /* S crédits : service worker (fonctionnement hors ligne).
    Pour publier une nouvelle version, changez le numéro de CACHE ci-dessous. */
-var CACHE = 'scredits-v5';
-var ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'config.js', 'manifest.json',
+var CACHE = 'scredits-v6';
+var ASSETS = ['./', 'index.html', 'style.css', 'app.js', 'store.js', 'sync.js', 'config.js', 'manifest.json',
   'icons/icon-192.png', 'icons/icon-512.png', 'icons/logo-ring.png', 'icons/favicon-64.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', function (e) {
