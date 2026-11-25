@@ -13,6 +13,8 @@
   var backend = null;
   var listeners = [];
   var chan = null;
+  var localHooks = [];
+  function fireLocal(path, del) { localHooks.slice().forEach(function (f) { try { f(path, del); } catch (e) { /* ignoré */ } }); }
 
   function clone(v) { return JSON.parse(JSON.stringify(v)); }
   function reqP(r) {
@@ -161,10 +163,10 @@
       },
       set: function (data) {
         var v = clone(data);
-        return openBackend().then(function (b) { return b.put(path, v); }).then(function () { notify(path); });
+        return openBackend().then(function (b) { return b.put(path, v); }).then(function () { notify(path); fireLocal(path, false); });
       },
       delete: function () {
-        return openBackend().then(function (b) { return b.del(path); }).then(function () { notify(path); });
+        return openBackend().then(function (b) { return b.del(path); }).then(function () { notify(path); fireLocal(path, true); });
       },
       collection: function (name) { return colRef(path + '/' + name); },
       onSnapshot: function (next, error) {
@@ -211,7 +213,13 @@
 
   window.SCreditsStore = {
     use: function (name) { return Promise.resolve(name === 'user' ? user : name === 'db' ? db : null); },
-    get persistent() { return persistent; }
+    get persistent() { return persistent; },
+    /* Réservé à la synchronisation en ligne (sync.js) */
+    internal: {
+      backend: function () { return openBackend(); },
+      notify: function (path) { notify(path); },
+      onLocalWrite: function (fn) { localHooks.push(fn); }
+    }
   };
 
   openBackend();
